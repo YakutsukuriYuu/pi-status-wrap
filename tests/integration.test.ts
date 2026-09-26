@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FooterComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import { FooterComponent, InteractiveMode, initTheme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { installFooterStatusWrap } from "../src/footer-patch.ts";
+import { installCustomFooterWrap, installFooterStatusWrap, type FooterLike } from "../src/footer-patch.ts";
 
 // FooterComponent renders through the process-wide theme singleton.
 initTheme("dark", false);
@@ -86,4 +87,71 @@ test("no statuses: patched footer is byte-identical to the built-in", () => {
 
   assert.deepEqual(patched, plain);
   assert.equal(patched.length, 2);
+});
+
+type SetFooterArg = Parameters<ExtensionUIContext["setFooter"]>[0];
+
+const customStatusProvider: ReadonlyFooterDataProvider = {
+  getExtensionStatuses: () => STATUSES,
+  getGitBranch: () => null,
+  getAvailableProviderCount: () => 1,
+  onBranchChange: () => () => {},
+};
+
+/**
+ * Drive Pi's real `InteractiveMode.setExtensionFooter` with a stand-in host.
+ *
+ * `setExtensionFooter` is private in the type declarations but is the method
+ * `ctx.ui.setFooter()` calls, so it is read off the runtime prototype here.
+ */
+function installFooterThroughRealHost(factory: NonNullable<SetFooterArg>): FooterLike {
+  const added: FooterLike[] = [];
+  const host = {
+    customFooter: undefined as FooterLike | undefined,
+    footer: { render: () => ["built-in footer"], invalidate() {} } satisfies FooterLike,
+    footerContainer: {
+      clear() {},
+      addChild(component: FooterLike) {
+        added.push(component);
+      },
+    },
+    footerDataProvider: customStatusProvider,
+    ui: { requestRender() {} },
+  };
+
+  const descriptor = Object.getOwnPropertyDescriptor(InteractiveMode.prototype, "setExtensionFooter");
+  const setExtensionFooter = descriptor?.value as ((this: unknown, factory: SetFooterArg) => void) | undefined;
+  assert.ok(setExtensionFooter, "InteractiveMode.setExtensionFooter is missing at runtime");
+
+  setExtensionFooter.call(host, factory);
+
+  const installed = added.at(-1);
+  assert.ok(installed, "setExtensionFooter did not add a footer component");
+  return installed;
+}
+
+test("real setExtensionFooter: a layout-owning footer keeps its design and gains the statuses", () => {
+  installCustomFooterWrap();
+
+  const installed = installFooterThroughRealHost(() => ({
+    render: () => ["~/repo on main", "1.0%/128k"],
+    invalidate() {},
+  }));
+
+  assert.deepEqual(installed.render(40).map(stripTerminalSequences), [
+    "~/repo on main",
+    "1.0%/128k",
+    "MCP 1/1 SSH: Connected TPS: 42.0 tok/s",
+  ]);
+});
+
+test("real setExtensionFooter: a footer that already shows every status is untouched", () => {
+  installCustomFooterWrap();
+
+  const installed = installFooterThroughRealHost(() => ({
+    render: () => ["MCP 1/1 SSH: Connected TPS: 42.0 tok/s"],
+    invalidate() {},
+  }));
+
+  assert.deepEqual(installed.render(80), ["MCP 1/1 SSH: Connected TPS: 42.0 tok/s"]);
 });

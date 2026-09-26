@@ -1,4 +1,4 @@
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 /**
  * Separator inserted between two extension status texts.
@@ -69,4 +69,34 @@ export function packStatusLines(
 
   if (current) lines.push(current);
   return lines;
+}
+
+/**
+ * Append the statuses a footer did not render at all.
+ *
+ * A footer that owns its own layout (a "starship"-style status line, for
+ * example) may drop status texts that do not fit its own budget. Those texts
+ * are visible nowhere else, so re-append them below the footer's output, packed
+ * at item boundaries.
+ *
+ * A status counts as rendered when its plain text appears inside a single
+ * rendered line, so a line that was cut short still counts as missing and a
+ * coincidental match across two lines cannot hide a dropped status.
+ */
+export function appendMissingStatuses(
+  lines: readonly string[],
+  statuses: ReadonlyMap<string, string>,
+  width: number,
+): string[] {
+  const items = orderStatusTexts(statuses);
+  if (items.length === 0) return [...lines];
+
+  const rendered = lines.map((line) => stripTerminalSequences(line));
+  const missing = items.filter((item) => {
+    const plain = stripTerminalSequences(item);
+    return plain.length > 0 && !rendered.some((line) => line.includes(plain));
+  });
+  if (missing.length === 0) return [...lines];
+
+  return [...lines, ...packStatusLines(missing, width)];
 }

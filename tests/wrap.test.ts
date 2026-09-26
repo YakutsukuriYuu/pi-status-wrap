@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { orderStatusTexts, packStatusLines, sanitizeStatusText } from "../src/wrap.ts";
+import { appendMissingStatuses, orderStatusTexts, packStatusLines, sanitizeStatusText } from "../src/wrap.ts";
 
 test("sanitizeStatusText collapses control characters", () => {
   assert.equal(sanitizeStatusText("a\nb\tc\r\n  d  "), "a b c d");
@@ -46,4 +46,46 @@ test("packStatusLines returns nothing for no items", () => {
 
 test("packStatusLines tolerates a zero width", () => {
   assert.deepEqual(packStatusLines(["ab"], 0), ["a", "b"]);
+});
+
+test("appendMissingStatuses appends everything when the footer shows none", () => {
+  const statuses = new Map([
+    ["mcp", "MCP 1/1"],
+    ["tokenSpeed", "TPS: 42.0 tok/s"],
+  ]);
+  assert.deepEqual(appendMissingStatuses(["cwd on main"], statuses, 40), [
+    "cwd on main",
+    "MCP 1/1 TPS: 42.0 tok/s",
+  ]);
+});
+
+test("appendMissingStatuses keeps only what the footer failed to show", () => {
+  const statuses = new Map([
+    ["mcp", "MCP 1/1"],
+    ["ssh-remote", "SSH: Connected"],
+    ["tokenSpeed", "TPS: 42.0 tok/s"],
+  ]);
+  assert.deepEqual(appendMissingStatuses(["cwd", "MCP 1/1"], statuses, 18), [
+    "cwd",
+    "MCP 1/1",
+    "SSH: Connected",
+    "TPS: 42.0 tok/s",
+  ]);
+});
+
+test("appendMissingStatuses treats a cut-off status as missing", () => {
+  const statuses = new Map([["tokenSpeed", "TPS: 42.0 tok/s"]]);
+  assert.deepEqual(appendMissingStatuses(["TPS: 42.0 to…"], statuses, 40), [
+    "TPS: 42.0 to…",
+    "TPS: 42.0 tok/s",
+  ]);
+});
+
+test("appendMissingStatuses ignores styling differences", () => {
+  const statuses = new Map([["mcp", "\u001b[36mMCP 1/1\u001b[0m"]]);
+  assert.deepEqual(appendMissingStatuses(["\u001b[2mMCP 1/1\u001b[0m"], statuses, 40), ["\u001b[2mMCP 1/1\u001b[0m"]);
+});
+
+test("appendMissingStatuses does nothing without statuses", () => {
+  assert.deepEqual(appendMissingStatuses(["cwd"], new Map(), 40), ["cwd"]);
 });

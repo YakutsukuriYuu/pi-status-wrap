@@ -1,5 +1,7 @@
-import { FooterComponent } from "@earendil-works/pi-coding-agent";
-import { orderStatusTexts, packStatusLines } from "./wrap.ts";
+import { FooterComponent, InteractiveMode } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { appendMissingStatuses, orderStatusTexts, packStatusLines } from "./wrap.ts";
 
 /**
  * Marker stored on the footer prototype as an own property.
@@ -95,6 +97,96 @@ export function installFooterStatusWrap(proto: StatusFooter = footerPrototype): 
     enumerable: false,
   });
   Object.defineProperty(proto, PATCH_MARK, {
+    value: true,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
+/** A footer component, as returned by a `ctx.ui.setFooter()` factory. */
+export type FooterLike = Component & { dispose?(): void };
+
+/** Factory argument of `ctx.ui.setFooter()`, i.e. what `setExtensionFooter` takes. */
+type FooterFactoryArg = Parameters<ExtensionUIContext["setFooter"]>[0];
+
+/** Host slice that installs custom footers. */
+export interface CustomFooterHost {
+  setExtensionFooter(factory: FooterFactoryArg): void;
+}
+
+/** Marker for the custom-footer patch, separate from the built-in footer mark. */
+const CUSTOM_FOOTER_MARK = Symbol.for("pi-status-wrap/custom-footer");
+
+// SAFETY: `setExtensionFooter` is private in InteractiveMode's declarations but
+// exists on the runtime prototype; CustomFooterHost is exactly that slice.
+const interactiveModePrototype = InteractiveMode.prototype as unknown as CustomFooterHost;
+
+/**
+ * Wrap a custom footer so statuses it dropped still appear.
+ *
+ * Extensions that call `ctx.ui.setFooter()` (a "starship"-style footer, for
+ * example) replace Pi's built-in footer, which makes the prototype patch above
+ * inert. Such a footer owns its own layout and may silently drop status texts
+ * that do not fit its budget. Appending whatever it did not render keeps every
+ * status on screen without touching the footer's own design.
+ */
+export function wrapFooterComponent(
+  component: FooterLike,
+  getStatuses: () => ReadonlyMap<string, string> | undefined,
+): FooterLike {
+  return {
+    render(width: number): string[] {
+      const lines = component.render(width);
+      try {
+        const statuses = getStatuses();
+        if (!statuses || statuses.size === 0) return lines;
+        return appendMissingStatuses(lines, statuses, width);
+      } catch {
+        // A footer experiment must never be able to break rendering.
+        return lines;
+      }
+    },
+    invalidate(): void {
+      component.invalidate();
+    },
+    dispose(): void {
+      component.dispose?.();
+    },
+  };
+}
+
+/**
+ * Wrap `InteractiveMode.setExtensionFooter` so custom footers are covered too.
+ *
+ * Extension factories run before any `session_start` handler, so installing
+ * this at load time guarantees the hook is in place before another extension
+ * can install its footer.
+ */
+export function installCustomFooterWrap(host: CustomFooterHost = interactiveModePrototype): void {
+  if (Object.prototype.hasOwnProperty.call(host, CUSTOM_FOOTER_MARK)) return;
+
+  const original = host.setExtensionFooter;
+
+  host.setExtensionFooter = function patchedSetExtensionFooter(
+    this: CustomFooterHost,
+    factory: FooterFactoryArg,
+  ): void {
+    if (typeof factory !== "function") {
+      original.call(this, factory);
+      return;
+    }
+
+    let provider: ReadonlyFooterDataProvider | undefined;
+
+    original.call(this, (tui, theme, footerData) => {
+      provider = footerData;
+      const component = factory(tui, theme, footerData);
+      return wrapFooterComponent(component, () => provider?.getExtensionStatuses());
+    });
+  };
+
+  Object.defineProperty(host, CUSTOM_FOOTER_MARK, {
     value: true,
     writable: true,
     configurable: true,

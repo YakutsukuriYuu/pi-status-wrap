@@ -1,7 +1,7 @@
 {
   "name": "pi-status-wrap",
-  "version": "0.1.0",
-  "description": "Wrap Pi's footer status line instead of truncating it at the terminal width",
+  "version": "0.2.0",
+  "description": "Keep Pi footer statuses readable: wrap the built-in status line and surface statuses a custom footer dropped",
   "license": "MIT",
   "type": "module",
   "keywords": ["pi-package", "pi", "footer", "status", "tui"],
